@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Взаиморасчёты — дашборд</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b1220;
+    --bg-2: #0f172a;
+    --panel: #131c2f;
+    --panel-2: #1a2540;
+    --border: #1f2a44;
+    --muted: #94a3b8;
+    --text: #e2e8f0;
+    --text-strong: #f8fafc;
+    --blue: #3b82f6;
+    --blue-soft: rgba(59, 130, 246, 0.12);
+    --orange: #f97316;
+    --orange-soft: rgba(249, 115, 22, 0.12);
+    --red: #ef4444;
+    --red-soft: rgba(239, 68, 68, 0.14);
+    --green: #22c55e;
+    --yellow: #eab308;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(1200px 700px at 80% -10%, #16213a 0%, transparent 60%),
+                radial-gradient(900px 500px at -10% 110%, #112038 0%, transparent 55%),
+                var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+  }
+  header.top .brand { display: flex; align-items: center; gap: 14px; }
+  header.top .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--blue), #6366f1);
+    display: grid; place-items: center; font-weight: 800; color: white;
+    box-shadow: var(--shadow);
+  }
+  header.top h1 { margin: 0; font-size: 22px; color: var(--text-strong); letter-spacing: -0.01em; }
+  header.top .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .btn {
+    border: 1px solid var(--border); background: var(--panel);
+    color: var(--text); padding: 10px 14px; border-radius: 10px; font-weight: 500;
+    cursor: pointer; transition: transform .06s ease, background .15s ease, border-color .15s ease;
+    display: inline-flex; align-items: center; gap: 8px; font-size: 14px;
+  }
+  .btn:hover { background: var(--panel-2); border-color: #2a3a63; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: white; }
+  .btn.primary:hover { background: #2563eb; border-color: #2563eb; }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: #fecaca; border-color: #4a1d1d; background: rgba(239,68,68,.08); }
+  .btn.danger:hover { background: rgba(239,68,68,.15); }
+
+  .dropzone {
+    border: 2px dashed #2a3a63; border-radius: 18px; padding: 64px 24px;
+    text-align: center; background: linear-gradient(180deg, var(--panel) 0%, rgba(19,28,47,0.6) 100%);
+    transition: border-color .15s, background .15s; cursor: pointer;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--blue); background: var(--blue-soft); }
+  .dropzone .ico {
+    width: 64px; height: 64px; margin: 0 auto 16px;
+    border-radius: 16px; display: grid; place-items: center;
+    background: var(--blue-soft); color: var(--blue); font-size: 30px;
+  }
+  .dropzone h2 { margin: 0 0 6px; color: var(--text-strong); font-size: 20px; }
+  .dropzone p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .dropzone .hint { margin-top: 16px; font-size: 12px; color: var(--muted); }
+
+  .kpi-grid {
+    display: grid; gap: 16px; margin-bottom: 24px;
+    grid-template-columns: repeat(3, 1fr);
+  }
+  @media (max-width: 900px) { .kpi-grid { grid-template-columns: 1fr; } }
+
+  .kpi {
+    position: relative; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .kpi::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--blue);
+  }
+  .kpi.payable::before { background: var(--orange); }
+  .kpi.overdue::before { background: var(--red); }
+  .kpi .label { font-size: 12px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+  .kpi .value {
+    margin-top: 8px; font-size: 30px; font-weight: 700; color: var(--text-strong);
+    letter-spacing: -0.02em; line-height: 1.1;
+  }
+  .kpi .meta { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .kpi.overdue.pulse .value { color: #fecaca; }
+  .kpi.overdue.pulse::after {
+    content: ''; position: absolute; top: 16px; right: 16px;
+    width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); }
+    50% { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+  }
+
+  .chart-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 20px; box-shadow: var(--shadow); margin-bottom: 24px;
+  }
+  .chart-card h3 { margin: 0 0 14px; font-size: 15px; color: var(--text-strong); font-weight: 600; }
+  .chart-wrap { position: relative; height: 360px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: var(--shadow); margin-bottom: 24px; overflow: hidden;
+  }
+  .panel header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap;
+  }
+  .panel header .title { display: flex; align-items: center; gap: 10px; }
+  .pill {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--blue);
+  }
+  .panel.payable header .pill { background: var(--orange); }
+  .panel header h3 { margin: 0; font-size: 16px; color: var(--text-strong); }
+  .panel header .count { color: var(--muted); font-size: 13px; }
+  .panel header .tools { display: flex; align-items: center; gap: 8px; }
+  .panel header input[type="search"] {
+    background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 8px 12px; font-size: 13px; min-width: 220px;
+    outline: none; transition: border-color .15s;
+  }
+  .panel header input[type="search"]:focus { border-color: var(--blue); }
+
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: 14px;
+  }
+  thead th {
+    text-align: left; font-weight: 600; color: var(--muted);
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--bg-2); cursor: pointer; user-select: none; white-space: nowrap;
+    font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  thead th:hover { color: var(--text); }
+  thead th .arrow { opacity: 0.4; margin-left: 4px; font-size: 10px; }
+  thead th.active .arrow { opacity: 1; color: var(--blue); }
+  thead th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td {
+    padding: 14px 16px; border-bottom: 1px solid var(--border); color: var(--text);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(255,255,255,0.02); }
+  tbody tr.is-overdue td { background: rgba(239, 68, 68, 0.05); }
+  tbody tr.is-overdue td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+  tfoot td {
+    padding: 14px 16px; font-weight: 700; color: var(--text-strong);
+    background: var(--bg-2); border-top: 1px solid var(--border);
+  }
+  tfoot td.num { font-size: 15px; }
+
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+  }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status.ok { background: rgba(34,197,94,0.12); color: #86efac; }
+  .status.ok .dot { background: var(--green); }
+  .status.warning { background: rgba(234,179,8,0.12); color: #fde047; }
+  .status.warning .dot { background: var(--yellow); }
+  .status.overdue { background: var(--red-soft); color: #fca5a5; }
+  .status.overdue .dot { background: var(--red); }
+
+  .empty-state { padding: 40px 20px; text-align: center; color: var(--muted); }
+
+  .footer-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--muted); font-size: 13px; margin-top: 8px; flex-wrap: wrap; gap: 12px;
+  }
+
+  /* Modal for column mapping */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    max-width: 520px; width: 100%; padding: 24px; box-shadow: var(--shadow);
+  }
+  .modal h3 { margin: 0 0 6px; color: var(--text-strong); }
+  .modal p { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .field select {
+    width: 100%; background: var(--bg-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 14px;
+    outline: none;
+  }
+  .field select:focus { border-color: var(--blue); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 200;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 18px; box-shadow: var(--shadow); color: var(--text);
+    transform: translateY(100px); opacity: 0; transition: all .25s ease;
+    max-width: 360px; font-size: 14px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.error { border-color: #4a1d1d; background: #1f1212; color: #fecaca; }
+  .toast.success { border-color: #1e3a2a; background: #102219; color: #86efac; }
+
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.2); border-top-color: white;
+    animation: spin 0.8s linear infinite; display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hidden { display: none !important; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 16px 12px 60px; }
+    header.top h1 { font-size: 18px; }
+    .kpi .value { font-size: 24px; }
+    .panel header { padding: 12px; }
+    .panel header input[type="search"] { min-width: 0; flex: 1; }
+    thead th, tbody td { padding: 10px 12px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="logo">₸</div>
+      <div>
+        <h1>Взаиморасчёты</h1>
+        <div class="sub" id="lastUpdated">Данные не загружены</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" />
+      <button class="btn primary" id="uploadBtn">
+        <span>📂</span><span>Загрузить файл из 1С</span>
+      </button>
+      <button class="btn danger hidden" id="clearBtn">Очистить данные</button>
+    </div>
+  </header>
+
+  <section id="dropzoneSection">
+    <div class="dropzone" id="dropzone">
+      <div class="ico">⬆</div>
+      <h2>Перетащите Excel-файл из 1С сюда</h2>
+      <p>или нажмите чтобы выбрать файл. Поддерживаются .xlsx, .xls и .csv.<br/>
+         Сайт автоматически найдёт колонки «Контрагент», «Дебиторская / Кредиторская задолженность» и «Дата».</p>
+      <div class="hint">Все данные обрабатываются прямо в браузере — ничего никуда не отправляется.</div>
+    </div>
+  </section>
+
+  <section id="dashboardSection" class="hidden">
+
+    <div class="kpi-grid">
+      <div class="kpi receivable">
+        <div class="label">Нам должны</div>
+        <div class="value" id="kpiReceivable">₸ 0</div>
+        <div class="meta" id="kpiReceivableMeta">0 контрагентов</div>
+      </div>
+      <div class="kpi payable">
+        <div class="label">Мы должны</div>
+        <div class="value" id="kpiPayable">₸ 0</div>
+        <div class="meta" id="kpiPayableMeta">0 контрагентов</div>
+      </div>
+      <div class="kpi overdue" id="kpiOverdueCard">
+        <div class="label">Просроченные</div>
+        <div class="value" id="kpiOverdue">₸ 0</div>
+        <div class="meta" id="kpiOverdueMeta">0 контрагентов</div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>Топ-10 контрагентов по сумме долга</h3>
+      <div class="chart-wrap"><canvas id="topChart"></canvas></div>
+    </div>
+
+    <div class="panel receivable">
+      <header>
+        <div class="title">
+          <span class="pill"></span>
+          <h3>Дебиторка — нам должны</h3>
+          <span class="count" id="receivableCount"></span>
+        </div>
+        <div class="tools">
+          <input type="search" id="receivableSearch" placeholder="Поиск контрагента..." />
+        </div>
+      </header>
+      <div class="table-wrap" id="receivableTableWrap"></div>
+    </div>
+
+    <div class="panel payable">
+      <header>
+        <div class="title">
+          <span class="pill"></span>
+          <h3>Кредиторка — мы должны</h3>
+          <span class="count" id="payableCount"></span>
+        </div>
+        <div class="tools">
+          <input type="search" id="payableSearch" placeholder="Поиск контрагента..." />
+        </div>
+      </header>
+      <div class="table-wrap" id="payableTableWrap"></div>
+    </div>
+
+    <div class="footer-bar">
+      <div>Данные сохраняются локально в браузере (localStorage).</div>
+      <div id="fileMeta"></div>
+    </div>
+  </section>
+</div>
+
+<!-- Column mapping modal -->
+<div class="modal-bg" id="mappingModal">
+  <div class="modal">
+    <h3>Укажите колонки вручную</h3>
+    <p>Не удалось автоматически определить нужные колонки. Выберите соответствие для каждого поля.</p>
+    <div class="field">
+      <label>Контрагент</label>
+      <select id="mapContractor"></select>
+    </div>
+    <div class="field">
+      <label>Сумма «Нам должны» (дебиторка)</label>
+      <select id="mapReceivable"></select>
+    </div>
+    <div class="field">
+      <label>Сумма «Мы должны» (кредиторка)</label>
+      <select id="mapPayable"></select>
+    </div>
+    <div class="field">
+      <label>Дата документа / срок оплаты</label>
+      <select id="mapDate"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="mapCancel">Отмена</button>
+      <button class="btn primary" id="mapConfirm">Применить</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const STORAGE_KEY = 'vzaimoraschety_v1';
+  const els = {
+    fileInput: document.getElementById('fileInput'),
+    uploadBtn: document.getElementById('uploadBtn'),
+    clearBtn: document.getElementById('clearBtn'),
+    dropzone: document.getElementById('dropzone'),
+    dropzoneSection: document.getElementById('dropzoneSection'),
+    dashboardSection: document.getElementById('dashboardSection'),
+    lastUpdated: document.getElementById('lastUpdated'),
+    fileMeta: document.getElementById('fileMeta'),
+    kpiReceivable: document.getElementById('kpiReceivable'),
+    kpiReceivableMeta: document.getElementById('kpiReceivableMeta'),
+    kpiPayable: document.getElementById('kpiPayable'),
+    kpiPayableMeta: document.getElementById('kpiPayableMeta'),
+    kpiOverdue: document.getElementById('kpiOverdue'),
+    kpiOverdueMeta: document.getElementById('kpiOverdueMeta'),
+    kpiOverdueCard: document.getElementById('kpiOverdueCard'),
+    receivableTableWrap: document.getElementById('receivableTableWrap'),
+    payableTableWrap: document.getElementById('payableTableWrap'),
+    receivableCount: document.getElementById('receivableCount'),
+    payableCount: document.getElementById('payableCount'),
+    receivableSearch: document.getElementById('receivableSearch'),
+    payableSearch: document.getElementById('payableSearch'),
+    mappingModal: document.getElementById('mappingModal'),
+    mapContractor: document.getElementById('mapContractor'),
+    mapReceivable: document.getElementById('mapReceivable'),
+    mapPayable: document.getElementById('mapPayable'),
+    mapDate: document.getElementById('mapDate'),
+    mapCancel: document.getElementById('mapCancel'),
+    mapConfirm: document.getElementById('mapConfirm'),
+    toast: document.getElementById('toast'),
+  };
+
+  const KEYWORDS = {
+    contractor: ['контрагент', 'организация', 'компания', 'клиент', 'поставщик', 'наименование'],
+    receivable: ['дебит', 'нам должны', 'долг нам', 'к получению', 'receivable'],
+    payable: ['кредит', 'мы должны', 'наш долг', 'к оплате', 'payable'],
+    date: ['дата', 'срок', 'период', 'date'],
+  };
+
+  // -------------- formatting --------------
+  function formatMoney(n) {
+    const v = Math.round(Number(n) || 0);
+    const sign = v < 0 ? '-' : '';
+    const abs = Math.abs(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return `${sign}₸ ${abs}`;
+  }
+  function formatDate(d) {
+    if (!d) return '—';
+    const date = d instanceof Date ? d : new Date(d);
+    if (isNaN(date.getTime())) return '—';
+    return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  // -------------- toast --------------
+  let toastTimer = null;
+  function toast(message, kind) {
+    els.toast.textContent = message;
+    els.toast.className = 'toast show' + (kind ? ' ' + kind : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => els.toast.className = 'toast', 3500);
+  }
+
+  // -------------- excel parsing --------------
+  function findColumn(headers, keywords) {
+    const lower = headers.map(h => String(h || '').toLowerCase().trim());
+    for (let i = 0; i < lower.length; i++) {
+      for (const kw of keywords) {
+        if (lower[i].includes(kw)) return i;
+      }
+    }
+    return -1;
+  }
+
+  function parseNumber(value) {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number') return value;
+    let s = String(value).trim();
+    // Remove spaces, NBSP, currency symbols
+    s = s.replace(/ /g, '').replace(/\s/g, '').replace(/[₸$€£руб\.]/gi, '');
+    // Russian decimal comma → dot
+    s = s.replace(',', '.');
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function parseDate(value) {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    // Excel serial number
+    if (typeof value === 'number') {
+      const utc = Math.round((value - 25569) * 86400 * 1000);
+      const d = new Date(utc);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const s = String(value).trim();
+    // dd.mm.yyyy or dd/mm/yyyy
+    let m = s.match(/^(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{2,4})$/);
+    if (m) {
+      let yr = parseInt(m[3], 10);
+      if (yr < 100) yr += 2000;
+      const d = new Date(yr, parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+      return isNaN(d.getTime()) ? null : d;
+    }
+    // ISO yyyy-mm-dd
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) {
+      const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function readWorkbook(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const wb = XLSX.read(data, { type: 'array', cellDates: true });
+          resolve(wb);
+        } catch (err) { reject(err); }
+      };
+      reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function sheetToRows(sheet) {
+    // Try to find the header row: scan first 10 rows, pick the row that
+    // contains the most KEYWORD matches across all categories.
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+    if (!raw.length) return { headers: [], rows: [] };
+
+    const allKW = [...KEYWORDS.contractor, ...KEYWORDS.receivable, ...KEYWORDS.payable, ...KEYWORDS.date];
+    let bestIdx = 0, bestScore = -1;
+    const scanLimit = Math.min(10, raw.length);
+    for (let i = 0; i < scanLimit; i++) {
+      const row = raw[i] || [];
+      let score = 0;
+      for (const cell of row) {
+        const lc = String(cell || '').toLowerCase();
+        if (!lc) continue;
+        for (const kw of allKW) if (lc.includes(kw)) { score++; break; }
+      }
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+
+    const headers = (raw[bestIdx] || []).map(h => String(h || '').trim());
+    const rows = raw.slice(bestIdx + 1).filter(r => r.some(c => c != null && c !== ''));
+    return { headers, rows };
+  }
+
+  function buildRecords(headers, rows, mapping) {
+    const records = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (const row of rows) {
+      const contractor = String(row[mapping.contractor] || '').trim();
+      if (!contractor) continue;
+      const recvRaw = mapping.receivable >= 0 ? parseNumber(row[mapping.receivable]) : 0;
+      const payRaw  = mapping.payable >= 0 ? parseNumber(row[mapping.payable]) : 0;
+      const date = mapping.date >= 0 ? parseDate(row[mapping.date]) : null;
+      const daysOverdue = date ? Math.max(0, Math.floor((today - date) / 86400000)) : 0;
+      const status = daysOverdue > 0 ? 'overdue' : (date && (date - today) / 86400000 <= 7 ? 'warning' : 'ok');
+
+      if (recvRaw > 0) {
+        records.push({
+          id: `r-${records.length}`,
+          contractor, amount: recvRaw,
+          date: date ? date.toISOString() : null,
+          daysOverdue, status, type: 'receivable',
+        });
+      }
+      if (payRaw > 0) {
+        records.push({
+          id: `p-${records.length}`,
+          contractor, amount: payRaw,
+          date: date ? date.toISOString() : null,
+          daysOverdue, status, type: 'payable',
+        });
+      }
+    }
+    return records;
+  }
+
+  // -------------- column mapping modal --------------
+  function fillSelect(select, headers, autoIdx, allowNone) {
+    select.innerHTML = '';
+    if (allowNone) {
+      const opt = document.createElement('option');
+      opt.value = '-1'; opt.textContent = '— нет такой колонки —';
+      select.appendChild(opt);
+    }
+    headers.forEach((h, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = h || `(колонка ${i + 1})`;
+      if (i === autoIdx) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+
+  function openMappingModal(headers, autoMap) {
+    fillSelect(els.mapContractor, headers, autoMap.contractor, false);
+    fillSelect(els.mapReceivable, headers, autoMap.receivable, true);
+    fillSelect(els.mapPayable, headers, autoMap.payable, true);
+    fillSelect(els.mapDate, headers, autoMap.date, true);
+    els.mappingModal.classList.add('show');
+    return new Promise((resolve) => {
+      const onConfirm = () => {
+        const m = {
+          contractor: parseInt(els.mapContractor.value, 10),
+          receivable: parseInt(els.mapReceivable.value, 10),
+          payable: parseInt(els.mapPayable.value, 10),
+          date: parseInt(els.mapDate.value, 10),
+        };
+        cleanup(); resolve(m);
+      };
+      const onCancel = () => { cleanup(); resolve(null); };
+      function cleanup() {
+        els.mappingModal.classList.remove('show');
+        els.mapConfirm.removeEventListener('click', onConfirm);
+        els.mapCancel.removeEventListener('click', onCancel);
+      }
+      els.mapConfirm.addEventListener('click', onConfirm);
+      els.mapCancel.addEventListener('click', onCancel);
+    });
+  }
+
+  // -------------- main flow --------------
+  async function handleFile(file) {
+    if (!file) return;
+    els.uploadBtn.innerHTML = '<span class="spinner"></span><span>Обработка...</span>';
+    els.uploadBtn.disabled = true;
+    try {
+      const wb = await readWorkbook(file);
+      const sheetName = wb.SheetNames[0];
+      const { headers, rows } = sheetToRows(wb.Sheets[sheetName]);
+      if (!headers.length || !rows.length) {
+        toast('Файл пустой или не содержит данных', 'error');
+        return;
+      }
+
+      const autoMap = {
+        contractor: findColumn(headers, KEYWORDS.contractor),
+        receivable: findColumn(headers, KEYWORDS.receivable),
+        payable: findColumn(headers, KEYWORDS.payable),
+        date: findColumn(headers, KEYWORDS.date),
+      };
+
+      let mapping = autoMap;
+      const needManual = autoMap.contractor < 0 || (autoMap.receivable < 0 && autoMap.payable < 0);
+      if (needManual) {
+        mapping = await openMappingModal(headers, autoMap);
+        if (!mapping) { toast('Загрузка отменена'); return; }
+        if (mapping.contractor < 0) { toast('Нужно указать колонку «Контрагент»', 'error'); return; }
+        if (mapping.receivable < 0 && mapping.payable < 0) {
+          toast('Нужно указать хотя бы одну колонку с суммой', 'error'); return;
+        }
+      }
+
+      const records = buildRecords(headers, rows, mapping);
+      if (!records.length) {
+        toast('В файле нет ненулевых записей по контрагентам', 'error');
+        return;
+      }
+
+      // Extract date from filename if available
+      const dateFromName = extractDateFromFileName(file.name);
+      const state = {
+        records,
+        fileName: file.name,
+        loadedAt: new Date().toISOString(),
+        fileDate: dateFromName ? dateFromName.toISOString() : null,
+      };
+      saveState(state);
+      render(state);
+      toast(`Загружено ${records.length} записей`, 'success');
+    } catch (err) {
+      console.error(err);
+      toast('Ошибка при обработке файла: ' + (err.message || err), 'error');
+    } finally {
+      els.uploadBtn.innerHTML = '<span>📂</span><span>Загрузить файл из 1С</span>';
+      els.uploadBtn.disabled = false;
+      els.fileInput.value = '';
+    }
+  }
+
+  function extractDateFromFileName(name) {
+    const m = name.match(/(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})/) ||
+              name.match(/(\d{1,2})[-_.](\d{1,2})[-_.](\d{4})/);
+    if (!m) return null;
+    if (m[1].length === 4) return new Date(+m[1], +m[2] - 1, +m[3]);
+    return new Date(+m[3], +m[2] - 1, +m[1]);
+  }
+
+  function saveState(state) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (e) { console.warn('Could not persist state', e); }
+  }
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+  function clearState() {
+    localStorage.removeItem(STORAGE_KEY);
+    chartInstance && chartInstance.destroy();
+    chartInstance = null;
+    els.dropzoneSection.classList.remove('hidden');
+    els.dashboardSection.classList.add('hidden');
+    els.clearBtn.classList.add('hidden');
+    els.lastUpdated.textContent = 'Данные не загружены';
+    els.fileMeta.textContent = '';
+    toast('Данные очищены');
+  }
+
+  // -------------- rendering --------------
+  let chartInstance = null;
+  const tableState = {
+    receivable: { sortBy: 'amount', sortDir: 'desc', search: '' },
+    payable:    { sortBy: 'amount', sortDir: 'desc', search: '' },
+  };
+
+  function render(state) {
+    els.dropzoneSection.classList.add('hidden');
+    els.dashboardSection.classList.remove('hidden');
+    els.clearBtn.classList.remove('hidden');
+
+    const recv = state.records.filter(r => r.type === 'receivable');
+    const pay  = state.records.filter(r => r.type === 'payable');
+
+    const totalRecv = recv.reduce((s, r) => s + r.amount, 0);
+    const totalPay  = pay.reduce((s, r) => s + r.amount, 0);
+    const overdueRecords = state.records.filter(r => r.status === 'overdue');
+    const totalOverdue = overdueRecords.reduce((s, r) => s + r.amount, 0);
+
+    els.kpiReceivable.textContent = formatMoney(totalRecv);
+    els.kpiReceivableMeta.textContent = `${uniqueContractors(recv)} контрагентов`;
+    els.kpiPayable.textContent = formatMoney(totalPay);
+    els.kpiPayableMeta.textContent = `${uniqueContractors(pay)} контрагентов`;
+    els.kpiOverdue.textContent = formatMoney(totalOverdue);
+    els.kpiOverdueMeta.textContent = `${uniqueContractors(overdueRecords)} контрагентов`;
+    els.kpiOverdueCard.classList.toggle('pulse', totalOverdue > 0);
+
+    renderTable('receivable', recv, els.receivableTableWrap, els.receivableCount);
+    renderTable('payable', pay, els.payableTableWrap, els.payableCount);
+    renderChart(recv, pay);
+
+    const loaded = new Date(state.loadedAt);
+    const fileDate = state.fileDate ? new Date(state.fileDate) : null;
+    els.lastUpdated.textContent = `Обновлено: ${fileDate ? formatDate(fileDate) : formatDate(loaded)}`;
+    els.fileMeta.textContent = `Файл: ${state.fileName}  •  загружен ${loaded.toLocaleString('ru-RU')}`;
+  }
+
+  function uniqueContractors(records) {
+    return new Set(records.map(r => r.contractor)).size;
+  }
+
+  function renderTable(type, records, container, countEl) {
+    const st = tableState[type];
+    const filtered = records.filter(r =>
+      !st.search || r.contractor.toLowerCase().includes(st.search.toLowerCase())
+    );
+    const sorted = [...filtered].sort((a, b) => {
+      const dir = st.sortDir === 'asc' ? 1 : -1;
+      let av = a[st.sortBy], bv = b[st.sortBy];
+      if (st.sortBy === 'date') { av = av ? new Date(av).getTime() : 0; bv = bv ? new Date(bv).getTime() : 0; }
+      if (typeof av === 'string') return av.localeCompare(bv, 'ru') * dir;
+      return ((av || 0) - (bv || 0)) * dir;
+    });
+
+    countEl.textContent = `${filtered.length} записей • итог ${formatMoney(sum(filtered, 'amount'))}`;
+
+    const cols = [
+      { key: 'contractor', label: 'Контрагент', type: 'text' },
+      { key: 'amount', label: 'Сумма долга', type: 'num' },
+      { key: 'date', label: 'Дата', type: 'text' },
+      { key: 'daysOverdue', label: 'Дней просрочки', type: 'num' },
+      { key: 'status', label: 'Статус', type: 'text' },
+    ];
+
+    let html = '<table><thead><tr>';
+    for (const c of cols) {
+      const active = c.key === st.sortBy;
+      const arrow = active ? (st.sortDir === 'asc' ? '▲' : '▼') : '↕';
+      html += `<th data-key="${c.key}" class="${c.type === 'num' ? 'num' : ''} ${active ? 'active' : ''}">`;
+      html += `${c.label}<span class="arrow">${arrow}</span></th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    if (!sorted.length) {
+      html += `<tr><td colspan="${cols.length}" class="empty-state">Нет записей по фильтру</td></tr>`;
+    } else {
+      for (const r of sorted) {
+        const overdueClass = r.status === 'overdue' ? ' class="is-overdue"' : '';
+        const statusLabel = r.status === 'overdue' ? 'Просрочено'
+                         : r.status === 'warning' ? 'Скоро истекает' : 'В сроке';
+        const daysText = r.daysOverdue > 0 ? `${r.daysOverdue} дн.` : '—';
+        html += `<tr${overdueClass}>`;
+        html += `<td>${escapeHtml(r.contractor)}</td>`;
+        html += `<td class="num">${formatMoney(r.amount)}</td>`;
+        html += `<td>${formatDate(r.date)}</td>`;
+        html += `<td class="num">${daysText}</td>`;
+        html += `<td><span class="status ${r.status}"><span class="dot"></span>${statusLabel}</span></td>`;
+        html += `</tr>`;
+      }
+    }
+    html += '</tbody>';
+    html += `<tfoot><tr><td>Итого</td><td class="num">${formatMoney(sum(sorted, 'amount'))}</td><td colspan="3"></td></tr></tfoot>`;
+    html += '</table>';
+    container.innerHTML = html;
+
+    container.querySelectorAll('th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.key;
+        if (st.sortBy === key) st.sortDir = st.sortDir === 'asc' ? 'desc' : 'asc';
+        else { st.sortBy = key; st.sortDir = (key === 'contractor') ? 'asc' : 'desc'; }
+        const state = loadState();
+        if (state) renderTable(type, state.records.filter(r => r.type === type), container, countEl);
+      });
+    });
+  }
+
+  function sum(arr, key) { return arr.reduce((s, r) => s + (r[key] || 0), 0); }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  function renderChart(recv, pay) {
+    const byContractor = new Map();
+    for (const r of recv) {
+      const e = byContractor.get(r.contractor) || { recv: 0, pay: 0 };
+      e.recv += r.amount; byContractor.set(r.contractor, e);
+    }
+    for (const r of pay) {
+      const e = byContractor.get(r.contractor) || { recv: 0, pay: 0 };
+      e.pay += r.amount; byContractor.set(r.contractor, e);
+    }
+    const entries = [...byContractor.entries()]
+      .map(([name, v]) => ({ name, recv: v.recv, pay: v.pay, total: v.recv + v.pay }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+
+    const labels = entries.map(e => e.name);
+    const recvData = entries.map(e => e.recv);
+    const payData  = entries.map(e => e.pay);
+
+    if (chartInstance) chartInstance.destroy();
+    const ctx = document.getElementById('topChart').getContext('2d');
+    chartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Нам должны', data: recvData, backgroundColor: '#3b82f6', borderRadius: 6 },
+          { label: 'Мы должны',  data: payData,  backgroundColor: '#f97316', borderRadius: 6 },
+        ],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            stacked: false,
+            ticks: { color: '#94a3b8', callback: v => formatMoney(v) },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+          y: {
+            ticks: { color: '#e2e8f0' },
+            grid: { color: 'rgba(255,255,255,0.03)' },
+          },
+        },
+        plugins: {
+          legend: { labels: { color: '#e2e8f0' } },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${formatMoney(ctx.parsed.x)}`,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // -------------- events --------------
+  els.uploadBtn.addEventListener('click', () => els.fileInput.click());
+  els.dropzone.addEventListener('click', () => els.fileInput.click());
+  els.fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+  els.clearBtn.addEventListener('click', () => {
+    if (confirm('Удалить все загруженные данные?')) clearState();
+  });
+
+  ['dragenter', 'dragover'].forEach(ev => {
+    els.dropzone.addEventListener(ev, e => { e.preventDefault(); els.dropzone.classList.add('drag'); });
+    document.addEventListener(ev, e => e.preventDefault());
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    els.dropzone.addEventListener(ev, e => { e.preventDefault(); els.dropzone.classList.remove('drag'); });
+  });
+  els.dropzone.addEventListener('drop', e => {
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+  document.addEventListener('drop', e => e.preventDefault());
+
+  els.receivableSearch.addEventListener('input', e => {
+    tableState.receivable.search = e.target.value;
+    const st = loadState();
+    if (st) renderTable('receivable', st.records.filter(r => r.type === 'receivable'), els.receivableTableWrap, els.receivableCount);
+  });
+  els.payableSearch.addEventListener('input', e => {
+    tableState.payable.search = e.target.value;
+    const st = loadState();
+    if (st) renderTable('payable', st.records.filter(r => r.type === 'payable'), els.payableTableWrap, els.payableCount);
+  });
+
+  // -------------- bootstrap --------------
+  const saved = loadState();
+  if (saved && saved.records && saved.records.length) {
+    // Recompute days overdue on load
+    const today = new Date(); today.setHours(0,0,0,0);
+    saved.records = saved.records.map(r => {
+      if (!r.date) return r;
+      const d = new Date(r.date);
+      const days = Math.max(0, Math.floor((today - d) / 86400000));
+      const status = days > 0 ? 'overdue' : (((d - today) / 86400000) <= 7 ? 'warning' : 'ok');
+      return { ...r, daysOverdue: days, status };
+    });
+    render(saved);
+  }
+})();
+</script>
+</body>
+</html>
