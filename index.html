@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
 <style>
   :root {
     --bg: #0b1220;
@@ -313,7 +314,7 @@
       </div>
     </div>
     <div class="header-actions">
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" />
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none" />
       <button class="btn primary" id="uploadBtn">
         <span>📂</span><span>Загрузить файл из 1С</span>
       </button>
@@ -327,8 +328,8 @@
   <section id="dropzoneSection">
     <div class="dropzone" id="dropzone">
       <div class="ico">⬆</div>
-      <h2>Перетащите Excel-файл из 1С сюда</h2>
-      <p>или нажмите чтобы выбрать файл. Поддерживаются .xlsx, .xls и .csv.<br/>
+      <h2>Перетащите файл из 1С сюда</h2>
+      <p>или нажмите чтобы выбрать файл. Поддерживаются .xlsx, .xls, .csv и .pdf.<br/>
          Сайт автоматически найдёт колонки «Контрагент», «Дебиторская / Кредиторская задолженность» и «Дата».</p>
       <div class="hint">Все данные обрабатываются прямо в браузере — ничего никуда не отправляется.</div>
     </div>
@@ -583,6 +584,105 @@
     return { headers, rows };
   }
 
+  async function parsePdfFile(file) {
+    // PDF.js worker setup
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+    // Collect text items from all pages into one flat list of lines.
+    // Each item: { str, x, y, page }
+    const allItems = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const viewport = page.getViewport({ scale: 1 });
+      for (const it of content.items) {
+        if (!it.str || !it.str.trim()) continue;
+        const x = it.transform[4];
+        const y = viewport.height - it.transform[5];
+        allItems.push({ str: it.str.trim(), x, y, page: p });
+      }
+    }
+    if (!allItems.length) return { headers: [], rows: [] };
+
+    // Group items into lines by (page, y) with tolerance ~3pt
+    const Y_TOL = 3;
+    allItems.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+    const lines = [];
+    let current = null;
+    for (const it of allItems) {
+      if (!current || it.page !== current.page || Math.abs(it.y - current.y) > Y_TOL) {
+        current = { page: it.page, y: it.y, items: [it] };
+        lines.push(current);
+      } else {
+        current.items.push(it);
+        current.y = (current.y + it.y) / 2;
+      }
+    }
+    for (const line of lines) line.items.sort((a, b) => a.x - b.x);
+
+    // Find header line: scoring by KEYWORD matches across all categories
+    const allKW = [...KEYWORDS.contractor, ...KEYWORDS.receivable, ...KEYWORDS.payable, ...KEYWORDS.date];
+    let bestIdx = -1, bestScore = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i].items.map(it => it.str).join(' ').toLowerCase();
+      let score = 0;
+      const matched = new Set();
+      for (const kw of allKW) if (text.includes(kw)) matched.add(kw);
+      score = matched.size;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    if (bestIdx < 0) return { headers: [], rows: [] };
+
+    // Build column bins from header item X positions.
+    // Adjacent items in the header that sit close together are merged into one column label.
+    const headerLine = lines[bestIdx];
+    const headerItems = headerLine.items;
+    const cols = [];
+    const MERGE_GAP = 14;
+    for (const it of headerItems) {
+      const last = cols[cols.length - 1];
+      if (last && it.x - (last.x + last.width) < MERGE_GAP) {
+        last.label += ' ' + it.str;
+        last.width = (it.x + (it.str.length * 5)) - last.x;
+      } else {
+        cols.push({ x: it.x, width: it.str.length * 5, label: it.str });
+      }
+    }
+    // Define column boundaries: each column spans from its x to the next column's x
+    for (let i = 0; i < cols.length; i++) {
+      cols[i].xStart = cols[i].x - 5;
+      cols[i].xEnd = (i + 1 < cols.length) ? cols[i + 1].x - 5 : Infinity;
+    }
+    const headers = cols.map(c => c.label.trim());
+
+    // For each line below the header, map items into column bins by X position.
+    // Skip lines that are themselves header repeats (multi-page).
+    const headerSig = headers.join(' ').toLowerCase();
+    const rows = [];
+    for (let i = bestIdx + 1; i < lines.length; i++) {
+      const line = lines[i];
+      const lineText = line.items.map(it => it.str).join(' ').toLowerCase();
+      if (lineText === headerSig || (bestScore > 2 && allKW.filter(kw => lineText.includes(kw)).length >= bestScore - 1)) {
+        continue;
+      }
+      const cells = new Array(cols.length).fill('');
+      for (const it of line.items) {
+        let colIdx = 0;
+        for (let c = 0; c < cols.length; c++) {
+          if (it.x >= cols[c].xStart && it.x < cols[c].xEnd) { colIdx = c; break; }
+        }
+        cells[colIdx] = (cells[colIdx] ? cells[colIdx] + ' ' : '') + it.str;
+      }
+      if (cells.some(c => c && c.trim())) rows.push(cells.map(c => c.trim()));
+    }
+
+    return { headers, rows };
+  }
+
   function buildRecords(headers, rows, mapping) {
     const records = [];
     const today = new Date();
@@ -667,11 +767,19 @@
     els.uploadBtn.innerHTML = '<span class="spinner"></span><span>Обработка...</span>';
     els.uploadBtn.disabled = true;
     try {
-      const wb = await readWorkbook(file);
-      const sheetName = wb.SheetNames[0];
-      const { headers, rows } = sheetToRows(wb.Sheets[sheetName]);
+      const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+      let parsed;
+      if (isPdf) {
+        parsed = await parsePdfFile(file);
+      } else {
+        const wb = await readWorkbook(file);
+        parsed = sheetToRows(wb.Sheets[wb.SheetNames[0]]);
+      }
+      const { headers, rows } = parsed;
       if (!headers.length || !rows.length) {
-        toast('Файл пустой или не содержит данных', 'error');
+        toast(isPdf
+          ? 'Не удалось извлечь таблицу из PDF. Возможно это скан — попробуйте Excel-файл.'
+          : 'Файл пустой или не содержит данных', 'error');
         return;
       }
 
