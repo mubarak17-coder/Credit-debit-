@@ -250,6 +250,55 @@
     .panel header input[type="search"] { min-width: 0; flex: 1; }
     thead th, tbody td { padding: 10px 12px; font-size: 13px; }
   }
+
+  @media print {
+    @page { size: A4; margin: 14mm 12mm; }
+    body {
+      background: white !important; color: #0f172a !important;
+      font-size: 11pt;
+    }
+    .wrap { max-width: none; padding: 0; }
+    .header-actions, .panel header .tools,
+    #dropzoneSection { display: none !important; }
+    header.top { border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; margin-bottom: 16px; }
+    header.top h1, .kpi .value, .panel header h3, tfoot td,
+    .chart-card h3 { color: #0f172a !important; }
+    header.top .sub, .kpi .label, .kpi .meta, .panel header .count,
+    .footer-bar { color: #475569 !important; }
+    .logo { background: #3b82f6 !important; }
+
+    .kpi, .chart-card, .panel {
+      background: white !important; border: 1px solid #e2e8f0 !important;
+      box-shadow: none !important; break-inside: avoid; page-break-inside: avoid;
+    }
+    .kpi-grid { grid-template-columns: repeat(3, 1fr) !important; gap: 10px; }
+    .kpi { padding: 12px; }
+    .kpi .value { font-size: 18pt; }
+    .kpi.overdue.pulse::after { display: none; }
+
+    .chart-card { page-break-after: auto; }
+    .chart-wrap { height: 240px; }
+
+    thead th {
+      background: #f8fafc !important; color: #475569 !important;
+      border-bottom: 1px solid #e2e8f0 !important;
+    }
+    thead th .arrow { display: none; }
+    tbody td { border-bottom: 1px solid #f1f5f9 !important; color: #0f172a !important; }
+    tbody tr.is-overdue td { background: #fef2f2 !important; }
+    tbody tr.is-overdue td:first-child { box-shadow: inset 3px 0 0 #ef4444 !important; }
+    tfoot td { background: #f8fafc !important; border-top: 1px solid #e2e8f0 !important; }
+
+    .status.ok { background: #dcfce7 !important; color: #166534 !important; }
+    .status.warning { background: #fef9c3 !important; color: #854d0e !important; }
+    .status.overdue { background: #fee2e2 !important; color: #991b1b !important; }
+
+    .panel { break-before: auto; }
+    table { font-size: 9pt; }
+    thead th, tbody td, tfoot td { padding: 6px 10px; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    .toast, .modal-bg { display: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -267,6 +316,9 @@
       <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" />
       <button class="btn primary" id="uploadBtn">
         <span>📂</span><span>Загрузить файл из 1С</span>
+      </button>
+      <button class="btn hidden" id="pdfBtn">
+        <span>📄</span><span>Сохранить PDF</span>
       </button>
       <button class="btn danger hidden" id="clearBtn">Очистить данные</button>
     </div>
@@ -381,6 +433,7 @@
     fileInput: document.getElementById('fileInput'),
     uploadBtn: document.getElementById('uploadBtn'),
     clearBtn: document.getElementById('clearBtn'),
+    pdfBtn: document.getElementById('pdfBtn'),
     dropzone: document.getElementById('dropzone'),
     dropzoneSection: document.getElementById('dropzoneSection'),
     dashboardSection: document.getElementById('dashboardSection'),
@@ -692,6 +745,7 @@
     els.dropzoneSection.classList.remove('hidden');
     els.dashboardSection.classList.add('hidden');
     els.clearBtn.classList.add('hidden');
+    els.pdfBtn.classList.add('hidden');
     els.lastUpdated.textContent = 'Данные не загружены';
     els.fileMeta.textContent = '';
     toast('Данные очищены');
@@ -708,6 +762,7 @@
     els.dropzoneSection.classList.add('hidden');
     els.dashboardSection.classList.remove('hidden');
     els.clearBtn.classList.remove('hidden');
+    els.pdfBtn.classList.remove('hidden');
 
     const recv = state.records.filter(r => r.type === 'receivable');
     const pay  = state.records.filter(r => r.type === 'payable');
@@ -876,6 +931,27 @@
   els.clearBtn.addEventListener('click', () => {
     if (confirm('Удалить все загруженные данные?')) clearState();
   });
+  els.pdfBtn.addEventListener('click', () => {
+    if (chartInstance) chartInstance.resize();
+    setTimeout(() => window.print(), 100);
+  });
+
+  const CHART_THEME = {
+    screen: { tickX: '#94a3b8', tickY: '#e2e8f0', gridX: 'rgba(255,255,255,0.05)', gridY: 'rgba(255,255,255,0.03)', legend: '#e2e8f0' },
+    print:  { tickX: '#475569', tickY: '#0f172a', gridX: '#e2e8f0',                gridY: '#f1f5f9',                legend: '#0f172a' },
+  };
+  function applyChartTheme(theme) {
+    if (!chartInstance) return;
+    const t = CHART_THEME[theme];
+    chartInstance.options.scales.x.ticks.color = t.tickX;
+    chartInstance.options.scales.y.ticks.color = t.tickY;
+    chartInstance.options.scales.x.grid.color  = t.gridX;
+    chartInstance.options.scales.y.grid.color  = t.gridY;
+    chartInstance.options.plugins.legend.labels.color = t.legend;
+    chartInstance.update('none');
+  }
+  window.addEventListener('beforeprint', () => applyChartTheme('print'));
+  window.addEventListener('afterprint',  () => applyChartTheme('screen'));
 
   ['dragenter', 'dragover'].forEach(ev => {
     els.dropzone.addEventListener(ev, e => { e.preventDefault(); els.dropzone.classList.add('drag'); });
