@@ -608,6 +608,28 @@
     }
     if (!allItems.length) return { headers: [], rows: [] };
 
+    // Detect single-invoice formats (ЭСФ, счёт-фактура, накладная, акт) BEFORE
+    // trying to extract tabular data. These docs aren't a receivables report.
+    const fullText = allItems.map(it => it.str).join(' ').toLowerCase();
+    const invoiceMarkers = [
+      'электронный счет-фактура', 'электронный счёт-фактура',
+      'счет-фактура', 'счёт-фактура',
+      'свидетельство плательщика ндс',
+      'раздел а. общий раздел', 'раздел b.', 'раздел c.', 'раздел g.',
+      'всего по счету', 'всего по счёту',
+      'эсф', 'товарно-транспортная накладная',
+    ];
+    const matchedMarkers = invoiceMarkers.filter(m => fullText.includes(m));
+    if (matchedMarkers.length >= 2) {
+      const isEsf = fullText.includes('электронный счет-фактура') || fullText.includes('электронный счёт-фактура');
+      const docType = isEsf ? 'ЭСФ (электронный счёт-фактура)' : 'счёт-фактура / накладная';
+      throw new Error(
+        `Это ${docType}, а не отчёт по взаиморасчётам. ` +
+        `Нужна выгрузка из 1С: «Оборотно-сальдовая ведомость по контрагентам» (счета 1210 / 3310) ` +
+        `или «Ведомость взаиморасчётов с контрагентами».`
+      );
+    }
+
     // Group items into lines by (page, y) with tolerance ~3pt
     const Y_TOL = 3;
     allItems.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
@@ -717,6 +739,40 @@
     return records;
   }
 
+  // Returns null if records look like a real receivables report,
+  // or a human-readable error string explaining what's wrong.
+  function validateRecords(records) {
+    if (!records.length) {
+      return 'В файле не найдено строк с ненулевыми суммами по контрагентам.';
+    }
+    // Heuristic 1: amounts that look like dates parsed as integers.
+    // 17.06.2026 → strip dots → 17062026 (7-8 digits starting with 1[0-3] then 0[1-9] / 1[0-2] then 20XX)
+    const looksLikeDateNumber = (n) => {
+      const s = String(Math.round(n));
+      if (s.length !== 7 && s.length !== 8) return false;
+      // pad to 8: dmmyyyy → DDMMYYYY (7 chars means leading day < 10)
+      const padded = s.length === 7 ? '0' + s : s;
+      const dd = parseInt(padded.slice(0, 2), 10);
+      const mm = parseInt(padded.slice(2, 4), 10);
+      const yyyy = parseInt(padded.slice(4, 8), 10);
+      return dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12 && yyyy >= 2000 && yyyy <= 2099;
+    };
+    const dateLikeCount = records.filter(r => looksLikeDateNumber(r.amount)).length;
+    if (dateLikeCount / records.length >= 0.5) {
+      return 'Похоже, в файле нет настоящих сумм долга — числа выглядят как даты. ' +
+             'Скорее всего, это не отчёт по взаиморасчётам.';
+    }
+    // Heuristic 2: contractor names that are mostly БИН-like (12 digits) or section labels
+    const looksLikeBin = (s) => /^\d{12}\b/.test(s.trim());
+    const hasSectionLabel = (s) => /(?:^|\s)(?:раздел|ИИН\/БИН|КБе|БИК|ИИК)\b/i.test(s);
+    const garbageNames = records.filter(r => looksLikeBin(r.contractor) || hasSectionLabel(r.contractor)).length;
+    if (garbageNames / records.length >= 0.5) {
+      return 'Названия контрагентов не похожи на названия компаний — найдены БИНы и обозначения разделов. ' +
+             'Проверьте, что это сводный отчёт по контрагентам, а не один документ.';
+    }
+    return null;
+  }
+
   // -------------- column mapping modal --------------
   function fillSelect(select, headers, autoIdx, allowNone) {
     select.innerHTML = '';
@@ -802,8 +858,9 @@
       }
 
       const records = buildRecords(headers, rows, mapping);
-      if (!records.length) {
-        toast('В файле нет ненулевых записей по контрагентам', 'error');
+      const validationError = validateRecords(records);
+      if (validationError) {
+        toast(validationError, 'error');
         return;
       }
 
