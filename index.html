@@ -215,12 +215,26 @@
   .modal p { margin: 0 0 18px; color: var(--muted); font-size: 14px; line-height: 1.5; }
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  .field select {
+  .field select, .field input[type="text"] {
     width: 100%; background: var(--bg-2); color: var(--text);
     border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 14px;
-    outline: none;
+    outline: none; font-family: inherit;
   }
-  .field select:focus { border-color: var(--blue); }
+  .field select:focus, .field input[type="text"]:focus { border-color: var(--blue); }
+
+  .company-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 4px; padding: 3px 8px; border-radius: 6px;
+    background: var(--blue-soft); color: #93c5fd; font-size: 11px; font-weight: 500;
+  }
+  .company-badge.unset { background: rgba(234,179,8,0.12); color: #fde047; }
+
+  pre.debug-json {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 14px; margin: 0; max-height: 420px; overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word;
+  }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 
   .toast {
@@ -311,16 +325,19 @@
       <div>
         <h1>Взаиморасчёты</h1>
         <div class="sub" id="lastUpdated">Данные не загружены</div>
+        <div class="company-badge unset" id="companyBadge">⚙ Укажите вашу компанию</div>
       </div>
     </div>
     <div class="header-actions">
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.pdf" style="display:none" />
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.pdf,image/*" style="display:none" />
       <button class="btn primary" id="uploadBtn">
         <span>📂</span><span>Загрузить файл из 1С</span>
       </button>
       <button class="btn hidden" id="pdfBtn">
         <span>📄</span><span>Сохранить PDF</span>
       </button>
+      <button class="btn ghost hidden" id="debugBtn" title="Показать сырой ответ Claude">🔍 Ответ Claude</button>
+      <button class="btn ghost" id="settingsBtn" title="Моя компания">⚙</button>
       <button class="btn danger hidden" id="clearBtn">Очистить данные</button>
     </div>
   </header>
@@ -329,9 +346,9 @@
     <div class="dropzone" id="dropzone">
       <div class="ico">⬆</div>
       <h2>Перетащите файл из 1С сюда</h2>
-      <p>или нажмите чтобы выбрать файл. Поддерживаются .xlsx, .xls, .csv и .pdf.<br/>
+      <p>или нажмите чтобы выбрать файл. Поддерживаются .xlsx, .xls, .csv, .pdf и изображения.<br/>
          Сайт автоматически найдёт колонки «Контрагент», «Дебиторская / Кредиторская задолженность» и «Дата».</p>
-      <div class="hint">Все данные обрабатываются прямо в браузере — ничего никуда не отправляется.</div>
+      <div class="hint">Excel/CSV и текстовые PDF обрабатываются в браузере. Сканы, фото и счёт-фактуры распознаются через Claude Vision.</div>
     </div>
   </section>
 
@@ -423,6 +440,38 @@
   </div>
 </div>
 
+<!-- Settings modal: моя компания -->
+<div class="modal-bg" id="settingsModal">
+  <div class="modal">
+    <h3>Моя компания</h3>
+    <p>Нужно для определения направления (дебет / кредит) в ЭСФ и счёт-фактурах. Claude сравнивает ваш БИН с БИН поставщика и получателя в документе.</p>
+    <div class="field">
+      <label>Название компании</label>
+      <input type="text" id="settingsName" placeholder='ТОО «O R G A N I K»' autocomplete="off" />
+    </div>
+    <div class="field">
+      <label>БИН (12 цифр)</label>
+      <input type="text" id="settingsBin" inputmode="numeric" maxlength="12" placeholder="180240013747" autocomplete="off" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="settingsCancel">Отмена</button>
+      <button class="btn primary" id="settingsSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Debug modal: сырой ответ Claude -->
+<div class="modal-bg" id="debugModal">
+  <div class="modal" style="max-width: 720px;">
+    <h3>Ответ Claude</h3>
+    <p>Сырой JSON от модели до нормализации. Если значения в дашборде неправильные — сравните с тем, что вернула модель.</p>
+    <pre class="debug-json" id="debugContent"></pre>
+    <div class="modal-actions">
+      <button class="btn primary" id="debugClose">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -430,6 +479,7 @@
   'use strict';
 
   const STORAGE_KEY = 'vzaimoraschety_v1';
+  const COMPANY_KEY = 'vzaimoraschety_company_v1';
   const els = {
     fileInput: document.getElementById('fileInput'),
     uploadBtn: document.getElementById('uploadBtn'),
@@ -439,6 +489,7 @@
     dropzoneSection: document.getElementById('dropzoneSection'),
     dashboardSection: document.getElementById('dashboardSection'),
     lastUpdated: document.getElementById('lastUpdated'),
+    companyBadge: document.getElementById('companyBadge'),
     fileMeta: document.getElementById('fileMeta'),
     kpiReceivable: document.getElementById('kpiReceivable'),
     kpiReceivableMeta: document.getElementById('kpiReceivableMeta'),
@@ -460,8 +511,40 @@
     mapDate: document.getElementById('mapDate'),
     mapCancel: document.getElementById('mapCancel'),
     mapConfirm: document.getElementById('mapConfirm'),
+    settingsBtn: document.getElementById('settingsBtn'),
+    settingsModal: document.getElementById('settingsModal'),
+    settingsName: document.getElementById('settingsName'),
+    settingsBin: document.getElementById('settingsBin'),
+    settingsCancel: document.getElementById('settingsCancel'),
+    settingsSave: document.getElementById('settingsSave'),
+    debugBtn: document.getElementById('debugBtn'),
+    debugModal: document.getElementById('debugModal'),
+    debugContent: document.getElementById('debugContent'),
+    debugClose: document.getElementById('debugClose'),
     toast: document.getElementById('toast'),
   };
+
+  // -------------- company settings (localStorage) --------------
+  function loadCompany() {
+    try {
+      const raw = localStorage.getItem(COMPANY_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+  function saveCompany(c) {
+    localStorage.setItem(COMPANY_KEY, JSON.stringify(c));
+  }
+  function updateCompanyBadge() {
+    const c = loadCompany();
+    if (c && c.name && c.bin) {
+      els.companyBadge.classList.remove('unset');
+      els.companyBadge.textContent = `🏢 ${c.name} • БИН ${c.bin}`;
+    } else {
+      els.companyBadge.classList.add('unset');
+      els.companyBadge.textContent = '⚙ Укажите вашу компанию';
+    }
+  }
+  let lastAIResponse = null;
 
   const KEYWORDS = {
     contractor: ['контрагент', 'организация', 'компания', 'клиент', 'поставщик', 'наименование'],
@@ -817,6 +900,53 @@
     });
   }
 
+  // -------------- AI extraction fallback (Claude Vision via Vercel AI Gateway) --------------
+  async function extractWithAI(file) {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    const base64 = btoa(binary);
+    const mediaType = file.type
+      || (/\.pdf$/i.test(file.name) ? 'application/pdf'
+        : /\.png$/i.test(file.name) ? 'image/png'
+        : /\.(jpe?g)$/i.test(file.name) ? 'image/jpeg'
+        : 'application/octet-stream');
+    const company = loadCompany() || {};
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90_000);
+    let res;
+    try {
+      res = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base64, mediaType, filename: file.name,
+          companyName: company.name || '',
+          companyBin: company.bin || '',
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') throw new Error('Claude не ответил за 90 секунд. Попробуйте файл поменьше.');
+      throw err;
+    }
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      let msg = `AI распознавание не удалось (${res.status})`;
+      try { const e = await res.json(); if (e?.error) msg = e.error; } catch {}
+      throw new Error(msg);
+    }
+    const json = await res.json();
+    lastAIResponse = json;
+    els.debugBtn.classList.remove('hidden');
+    return json;
+  }
+
   // -------------- main flow --------------
   async function handleFile(file) {
     if (!file) return;
@@ -824,18 +954,55 @@
     els.uploadBtn.disabled = true;
     try {
       const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
-      let parsed;
-      if (isPdf) {
-        parsed = await parsePdfFile(file);
+      const isImage = /^image\//.test(file.type || '') || /\.(png|jpe?g|webp|heic)$/i.test(file.name);
+
+      let parsed = null;
+      let aiReason = null;
+      let pdfErrMsg = '';
+
+      if (isImage) {
+        aiReason = 'image';
+      } else if (isPdf) {
+        try {
+          parsed = await parsePdfFile(file);
+          if (!parsed.headers.length || !parsed.rows.length) {
+            aiReason = 'empty-pdf';
+            parsed = null;
+          }
+        } catch (err) {
+          aiReason = 'invoice-pdf';
+          pdfErrMsg = err?.message || '';
+          parsed = null;
+        }
       } else {
         const wb = await readWorkbook(file);
         parsed = sheetToRows(wb.Sheets[wb.SheetNames[0]]);
       }
-      const { headers, rows } = parsed;
+
+      if (aiReason) {
+        const company = loadCompany();
+        const noCompanyNote = (!company || !company.bin)
+          ? '\n\n⚠ БИН вашей компании не указан в настройках — направление дебет/кредит будет определено приблизительно. Откройте ⚙ и заполните данные для точности.'
+          : '';
+        const promptText = aiReason === 'image'
+          ? 'Это изображение. Распознать данные через Claude Vision? (используется AI, может стоить денег)' + noCompanyNote
+          : aiReason === 'empty-pdf'
+            ? 'Не удалось извлечь таблицу из PDF (возможно скан). Распознать через Claude Vision?' + noCompanyNote
+            : `${pdfErrMsg}\n\nРаспознать как один документ через Claude Vision?` + noCompanyNote;
+        if (!confirm(promptText)) {
+          toast('Загрузка отменена');
+          return;
+        }
+        els.uploadBtn.innerHTML = '<span class="spinner"></span><span>Анализ через Claude...</span>';
+        parsed = await extractWithAI(file);
+        if (parsed && parsed._meta && parsed._meta.warning) {
+          toast(parsed._meta.warning, 'error');
+        }
+      }
+
+      const { headers, rows } = parsed || { headers: [], rows: [] };
       if (!headers.length || !rows.length) {
-        toast(isPdf
-          ? 'Не удалось извлечь таблицу из PDF. Возможно это скан — попробуйте Excel-файл.'
-          : 'Файл пустой или не содержит данных', 'error');
+        toast('Не удалось извлечь данные из файла', 'error');
         return;
       }
 
@@ -907,10 +1074,12 @@
     localStorage.removeItem(STORAGE_KEY);
     chartInstance && chartInstance.destroy();
     chartInstance = null;
+    lastAIResponse = null;
     els.dropzoneSection.classList.remove('hidden');
     els.dashboardSection.classList.add('hidden');
     els.clearBtn.classList.add('hidden');
     els.pdfBtn.classList.add('hidden');
+    els.debugBtn.classList.add('hidden');
     els.lastUpdated.textContent = 'Данные не загружены';
     els.fileMeta.textContent = '';
     toast('Данные очищены');
@@ -1101,6 +1270,56 @@
     setTimeout(() => window.print(), 100);
   });
 
+  // settings modal
+  function openSettings() {
+    const c = loadCompany() || {};
+    els.settingsName.value = c.name || '';
+    els.settingsBin.value = c.bin || '';
+    els.settingsModal.classList.add('show');
+    setTimeout(() => els.settingsName.focus(), 50);
+  }
+  function closeSettings() { els.settingsModal.classList.remove('show'); }
+  els.settingsBtn.addEventListener('click', openSettings);
+  els.companyBadge.addEventListener('click', openSettings);
+  els.settingsCancel.addEventListener('click', closeSettings);
+  els.settingsSave.addEventListener('click', () => {
+    const name = els.settingsName.value.trim();
+    const bin = els.settingsBin.value.trim();
+    if (bin && !/^\d{12}$/.test(bin)) {
+      toast('БИН должен быть ровно 12 цифр', 'error');
+      return;
+    }
+    if (!name && !bin) {
+      localStorage.removeItem(COMPANY_KEY);
+    } else {
+      saveCompany({ name, bin });
+    }
+    closeSettings();
+    updateCompanyBadge();
+    toast('Сохранено', 'success');
+  });
+  els.settingsBin.addEventListener('input', e => {
+    e.target.value = e.target.value.replace(/\D/g, '').slice(0, 12);
+  });
+
+  // debug modal
+  els.debugBtn.addEventListener('click', () => {
+    if (!lastAIResponse) {
+      toast('Нет данных от Claude в этой сессии', 'error');
+      return;
+    }
+    els.debugContent.textContent = JSON.stringify(lastAIResponse, null, 2);
+    els.debugModal.classList.add('show');
+  });
+  els.debugClose.addEventListener('click', () => els.debugModal.classList.remove('show'));
+
+  // close modals on backdrop click
+  [els.settingsModal, els.debugModal, els.mappingModal].forEach(m => {
+    m.addEventListener('click', e => {
+      if (e.target === m) m.classList.remove('show');
+    });
+  });
+
   const CHART_THEME = {
     screen: { tickX: '#94a3b8', tickY: '#e2e8f0', gridX: 'rgba(255,255,255,0.05)', gridY: 'rgba(255,255,255,0.03)', legend: '#e2e8f0' },
     print:  { tickX: '#475569', tickY: '#0f172a', gridX: '#e2e8f0',                gridY: '#f1f5f9',                legend: '#0f172a' },
@@ -1143,6 +1362,7 @@
   });
 
   // -------------- bootstrap --------------
+  updateCompanyBadge();
   const saved = loadState();
   if (saved && saved.records && saved.records.length) {
     // Recompute days overdue on load

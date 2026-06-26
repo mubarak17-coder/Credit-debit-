@@ -1,0 +1,171 @@
+import { generateObject } from 'ai';
+import { z } from 'zod';
+
+export const config = {
+  runtime: 'nodejs',
+  maxDuration: 90,
+};
+
+const Row = z.object({
+  contractor: z.string().min(1).describe('Название компании-контрагента (НЕ нашей), без БИН/ИИН и кодов'),
+  receivable: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .describe('Дебиторская задолженность (контрагент должен нам). Сумма С НДС, формат "12345.67" или "0"'),
+  payable: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .describe('Кредиторская задолженность (мы должны контрагенту). Сумма С НДС, формат "12345.67" или "0"'),
+  due_date: z
+    .string()
+    .regex(/^$|^\d{2}\.\d{2}\.\d{4}$/)
+    .describe('Срок оплаты в формате ДД.ММ.ГГГГ, или пустая строка если в документе нет срока'),
+});
+
+const ExtractedTable = z.object({
+  document_type: z
+    .string()
+    .describe('Краткий тип: "ЭСФ", "счёт-фактура", "оборотно-сальдовая", "акт сверки", "фото таблицы", или иное'),
+  direction_determined: z
+    .boolean()
+    .describe('true если БИН нашей компании найден в документе как поставщик ИЛИ получатель (или это сводный отчёт). false если направление пришлось угадывать.'),
+  warning: z
+    .string()
+    .describe('Текст предупреждения для пользователя, или пустая строка если всё ок'),
+  rows: z.array(Row),
+});
+
+function buildSystemPrompt({ companyName, companyBin }) {
+  const hasBin = !!(companyBin && /^\d{12}$/.test(companyBin));
+  const companyBlock = hasBin
+    ? `### Наша компания\nНазвание: ${companyName || '(не указано)'}\nБИН: ${companyBin}\n`
+    : `### Наша компания\nНЕ УКАЗАНА. Это означает: для счёт-фактур / ЭСФ направление дебет/кредит придётся угадывать. В этом случае ставь direction_determined=false и warning="БИН вашей компании не указан в настройках — направление дебет/кредит определено приблизительно".\n`;
+
+  return `Ты — парсер бухгалтерских документов из Казахстана (1С, ЭСФ, счёт-фактура, накладная, акт сверки, оборотно-сальдовая ведомость, ведомость взаиморасчётов).
+
+${companyBlock}
+
+### Колонки
+
+1. contractor — название компании-контрагента (НЕ нашей). Без БИН/ИИН, без кодов, без слова "ИП" если оно дублирует. Кавычки и регистр сохраняй как в документе.
+2. receivable — сумма, которую КОНТРАГЕНТ должен НАМ (дебиторская задолженность). С НДС.
+3. payable — сумма, которую МЫ должны КОНТРАГЕНТУ (кредиторская задолженность). С НДС.
+4. due_date — срок оплаты в формате ДД.ММ.ГГГГ. Если срока оплаты в документе НЕТ — пустая строка "".
+
+### Правило выбора суммы
+
+Бери итоговую сумму С НДС, то есть ту, что реально подлежит оплате.
+- Для ЭСФ: это колонка 14 в Разделе G — "Стоимость товаров, работ, услуг с учётом косвенных налогов" — или строка "Всего по счёту".
+- Для счёт-фактуры / накладной: итоговая сумма с НДС.
+- Для оборотки / акта сверки: сумма из соответствующей колонки таблицы как есть.
+Формат: только цифры и одна точка ("689010" или "12345.67"). Никаких пробелов, тенге, "тг", запятых-разделителей тысяч.
+Если суммы нет — "0".
+
+### Правило выбора даты
+
+due_date — это СРОК ОПЛАТЫ, а НЕ:
+- НЕ "дата выписки" (например поле 2 в ЭСФ)
+- НЕ "дата совершения оборота" (поле 3 в ЭСФ)
+- НЕ дата составления документа
+
+Если в документе нет явного срока оплаты — оставь "" (пустую строку).
+Если в "Условиях оплаты" указана только форма ("безналичный расчёт", "наличный") без срока — оставь "".
+Не подставляй и не вычисляй "+30 дней" если такого нет в документе.
+
+### Правило направления для ОДНОГО документа (ЭСФ, счёт-фактура, накладная, акт выполненных работ)
+
+Это документ на одну сделку. У него есть Раздел B (поставщик) и Раздел C (получатель). Сравни БИН в этих разделах с НАШИМ БИН:
+
+- Наш БИН = БИН поставщика (Раздел B) → мы продавец → контрагент = получатель из Раздела C → сумма в receivable, payable="0". direction_determined=true.
+- Наш БИН = БИН получателя (Раздел C) → мы покупатель → контрагент = поставщик из Раздела B → сумма в payable, receivable="0". direction_determined=true.
+- Наш БИН не найден ни там, ни там → direction_determined=false, контрагент = получатель из Раздела C, сумма в receivable, в warning напиши: "БИН вашей компании (XXX) не найден в документе. Контрагент и направление могут быть неверны."
+- Наш БИН не указан в настройках → direction_determined=false, контрагент = получатель из Раздела C, сумма в receivable.
+
+Один документ → ОДНА строка в rows.
+
+### Правило для многострочных отчётов (оборотно-сальдовая, акт сверки, ведомость взаиморасчётов)
+
+Каждая строка таблицы документа = одна строка в rows. Используй колонки документа как есть: что в "дебет" — в receivable, что в "кредит" — в payable.
+Пропускай: строки "Итого", "Всего", "Сальдо на конец", разделители, пустые строки, строки с одними БИН/ИИН без названия.
+direction_determined=true (это уже сводный отчёт, направление в нём явно).
+
+### Формат вывода
+
+Все поля Row — строки (даже числа). Числа — только цифры и точка. Пустая дата — "".
+`;
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString('utf8');
+    const { base64, mediaType, filename, companyName, companyBin } = JSON.parse(raw);
+
+    if (!base64 || !mediaType) {
+      res.status(400).json({ error: 'base64 and mediaType are required' });
+      return;
+    }
+
+    const data = Buffer.from(base64, 'base64');
+    if (data.length === 0) {
+      res.status(400).json({ error: 'empty file' });
+      return;
+    }
+    if (data.length > 8 * 1024 * 1024) {
+      res.status(413).json({ error: 'Файл больше 8 МБ — слишком большой для распознавания.' });
+      return;
+    }
+
+    if (!process.env.AI_GATEWAY_API_KEY) {
+      res
+        .status(503)
+        .json({ error: 'AI Gateway не настроен: добавьте AI_GATEWAY_API_KEY в переменные окружения проекта.' });
+      return;
+    }
+
+    const result = await generateObject({
+      model: 'anthropic/claude-sonnet-4-6',
+      schema: ExtractedTable,
+      system: buildSystemPrompt({ companyName, companyBin }),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Файл: ${filename || 'document'}. Извлеки данные о взаиморасчётах строго по схеме.`,
+            },
+            { type: 'file', data, mediaType },
+          ],
+        },
+      ],
+    });
+
+    const obj = result.object;
+    const headers = ['Контрагент', 'Дебиторская задолженность', 'Кредиторская задолженность', 'Дата'];
+    const rows = obj.rows.map((r) => [r.contractor, r.receivable, r.payable, r.due_date]);
+
+    res.status(200).json({
+      headers,
+      rows,
+      _meta: {
+        document_type: obj.document_type,
+        direction_determined: obj.direction_determined,
+        warning: obj.warning,
+        raw: obj,
+      },
+    });
+  } catch (err) {
+    console.error('extract error:', err);
+    res
+      .status(500)
+      .json({ error: err?.message || 'Не удалось распознать документ через Claude.' });
+  }
+}
