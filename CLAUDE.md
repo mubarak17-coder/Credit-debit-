@@ -19,8 +19,8 @@ index.html (~1380 lines, everything inline)
 └── localStorage               — persists parsed records + company settings
 
 api/extract.js (Vercel Node.js function, maxDuration: 90s)
-├── ai v6 (Vercel AI SDK) + generateObject + zod schema
-├── model: 'anthropic/claude-sonnet-4-6' via Vercel AI Gateway
+├── ai v6 + @ai-sdk/anthropic@ai-v6 (3.0.88) + generateObject + zod schema
+├── model: anthropic('claude-sonnet-4-5-20250929') — direct Anthropic API, env ANTHROPIC_API_KEY
 └── Russian system prompt for KZ accounting docs (ЭСФ, акт сверки, etc.)
 ```
 
@@ -76,44 +76,34 @@ Always goes straight to AI path — `extractWithAI()`.
 
 ## Prompt design (`api/extract.js`)
 
-The Russian system prompt teaches Claude to handle:
-- **Single-doc** (ЭСФ, счёт-фактура, накладная, акт): compare our БИН against Section B/C → assign to receivable or payable. One row in output.
-- **Multi-row reports** (оборотно-сальдовая, акт сверки, ведомость): each table row = one output row; skip "Итого" / "Сальдо" / separators. Use document's columns as-is.
+The Russian system prompt teaches Claude to handle THREE document classes — they're distinct, not collapsed:
+- **Single-doc** (ЭСФ, счёт-фактура, накладная): compare our БИН against Section B/C → one row, assigned to receivable or payable.
+- **Акт сверки** (2-party reconciliation): one row with the CLOSING balance from "Задолженность по состоянию на …". Mirrored Debit/Credit columns hold the same amount duplicated — never sum them. Direction from the "долг [сторона]" sentence at the bottom.
+- **Multi-row reports** (оборотно-сальдовая, ведомость взаиморасчётов с НЕСКОЛЬКИМИ контрагентами): each table row = one output row; skip "Итого" / "Сальдо" / separators.
 - Number format: digits + one dot, no spaces/currency. Empty = "0".
 - Date = срок оплаты only. NOT issue date / oborot date. Empty string "" if missing.
 
 ---
 
-## Current state (as of 2026-06-26)
+## Current state (as of 2026-06-27)
 
-**The AI Gateway path is broken in production because the code was never deployed.**
+**AI path is live and verified end-to-end.** Production at `credit-debit-swart.vercel.app` answers `/api/extract` correctly. Tested with акт сверки ORGANIK → 1 row, 1 238 047 ₸.
 
-`git status` shows untracked:
-- `api/` directory (entire serverless function)
-- `package.json`, `package-lock.json` (deps `ai`, `zod`)
-- Modified `index.html` (the `extractWithAI` call to `/api/extract`)
+### Provider switch (2026-06-27)
+Moved off Vercel AI Gateway → direct Anthropic API. Reason: user has Anthropic credits and prefers direct billing. Env var renamed `AI_GATEWAY_API_KEY` → `ANTHROPIC_API_KEY`. Provider package: `@ai-sdk/anthropic@ai-v6` (3.0.88) — the stable `4.x` line targets ai-sdk v5 spec and breaks at runtime with `ai@6`. Always pin to the `ai-v6` dist-tag.
 
-Last production deploy `dpl_ECqucV9i9eTYGMMXbzcocPAJdanx` (created at commit `3dd4a53`) contains only `index.html` without the AI path.
+### Routing fix (2026-06-27)
+Акт сверки PDFs now force the AI path. `parsePdfFile()` detects markers (`акт сверки взаимных расчётов`, `задолженность по состоянию на`, `нижеподписавшиеся`, …) and throws, which triggers the confirm-dialog → `/api/extract`. Without this, pdf.js text-layer parsing read the mirrored Debit/Credit columns as separate contractors with doubled amounts (40 fake contractors × duplicated sums → quadrillion-scale total).
 
-`curl -X POST https://credit-debit-swart.vercel.app/api/extract` returns **404 NOT_FOUND** — function doesn't exist on the deployed bundle.
-
-Also unverified: whether `AI_GATEWAY_API_KEY` env variable exists in Vercel project settings. Needed for the function to work after deploy.
-
-### To make it work
-
-1. User adds `AI_GATEWAY_API_KEY` to Vercel env vars (Production + Preview + Development) at https://vercel.com/yerassyl-s-projects/credit-debit/settings/environment-variables. Get key from https://vercel.com/dashboard/ai-gateway → API Keys.
-2. Commit untracked files (`api/`, `package*.json`) + modified `index.html`, push to `main`. Vercel auto-deploys.
-3. Smoke test: POST a sample PDF to `/api/extract` → expect JSON with rows, not 404 or 503.
+### parseNumber guard (2026-06-27)
+`parseNumber()` in `index.html` detects "X X" pattern where the two halves are equal (e.g. `"120 960,00 120 960,00"` — Debit + Credit columns concatenated by AI) and keeps only the first half. Real thousand-separated numbers (`"1 234 567,00"`) are unaffected because they tokenize to an odd count.
 
 ---
 
 ## Discussed plans (not yet implemented)
 
-User asked about adding **Claude Vision for PDF reading**, but most of that is already done — just not deployed. Three potential changes were raised:
-
 | Proposed | Current | Decision |
 |---|---|---|
-| Direct Anthropic API (`x-api-key`) instead of AI Gateway | AI Gateway via `ai` SDK | Pending — only worth it if user wants Anthropic billing directly, not Vercel's |
 | User-entered API key in UI (localStorage) + server env fallback | Server env only | Pending — adds CORS / browser-key-leak considerations |
 | Client-side `pdf.js → canvas → PNG → {type:'image'}` | Send PDF blob as `{type:'file'}` to Claude | **Don't do this.** Claude's PDF support uses text layer + vision; rasterizing first loses text quality. Only switch if there's a concrete reason (e.g. > 32 MB PDFs, or moving off Claude file API). |
 | Add `document_number` to extracted fields | Not extracted | Pending — trivial: add to zod schema + prompt. |
