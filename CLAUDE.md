@@ -110,6 +110,51 @@ Moved off Vercel AI Gateway → direct Anthropic API. Reason: user has Anthropic
 
 ---
 
+## Client request: Product reports + counterparty reports (2026-06-27, scoping)
+
+Client wants the app to auto-generate two report families from 1C exports:
+
+**A. Product reports — NEW domain, not in current data model:**
+- Сколько купили (purchase qty / sum)
+- Сколько продали (sales qty / sum)
+- Часто продаваемые товары (top sellers)
+- Маржинальные часто продаваемые (top by margin × frequency)
+
+**B. Counterparty reports — extension of what exists:**
+- Кто кому сколько должен — already exists
+- Как долго должен — already exists (`daysOverdue`)
+- Sort by debt asc (1k ₸ → millions) — trivial; either column-sort or dedicated "small debtors" view (TBD with client)
+
+### Gaps that block design
+
+1. **No product data exists today.** Whole new domain. Needs: new localStorage namespace (`products_v1`), new parser flow for product-line reports, new UI section (likely tabs).
+2. **Margin source unknown.** Two scenarios:
+   - **Single-file:** 1C "Валовая прибыль" report has [номенклатура, кол-во, выручка, себестоимость, прибыль, %] all in one. Ideal — direct margin.
+   - **Two-file:** sales + purchase reports separately. Forces fuzzy-match on product name (e.g. "Молоко Простоквашино 1л" vs "Молоко Простоквашино 1000мл" won't match). Needs SKU/артикул, or fuzzy match logic.
+3. **"Часто продаваемые" is ambiguous.** Top by quantity / top by revenue / top by deal count — three different rankings.
+4. **Period scope undecided.** Overwrite each upload (current model for debts) vs accumulate periods for comparison (Jan vs Feb).
+
+### Open questions for the client (asked, not yet answered)
+
+1. Which exact 1C reports do you export? Names: "Отчёт по продажам", "Анализ продаж", "Валовая прибыль", "Ведомость по партиям товаров", "ОСВ по 1330/2410"?
+2. Does any of your sales reports already have a себестоимость / прибыль column? (Determines single-file vs two-file design.)
+3. "Часто продаваемые" = by quantity, by revenue, or by deal count?
+4. Period: one upload overwrites prior (current model) or keep history to compare months?
+5. "Sort debts low→high" — column sort enough, or need a dedicated "small debtors" page?
+
+### Provisional architecture (sketch only — finalize after answers + sample files)
+
+- **localStorage:** add `products_v1` namespace alongside `vzaimoraschety_v1` and `vzaimoraschety_company_v1`.
+- **UI:** tabbed layout — Взаиморасчёты | Товары | Сводка. Currently single page.
+- **Parser:** reuse keyword-scoring header detection + AI fallback. Different column keywords (номенклатура, кол-во, цена, сумма, себестоимость).
+- **Margin computation:** prefer report's own "прибыль" column; else `выручка - себестоимость`; else show revenue only with warning.
+
+### Blocker
+
+Need 2–3 real sample xlsx files from the client (any product-side report they actually export). Without seeing real column names + sheet structure, every design choice is a guess and will likely need rework.
+
+---
+
 ## Vercel project info
 
 - Project ID: `prj_t8y6bi6vAm50ns772TxpR3nyNxPJ`
