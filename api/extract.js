@@ -1,4 +1,5 @@
 import { generateObject } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
 
 export const config = {
@@ -142,15 +143,15 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (!process.env.AI_GATEWAY_API_KEY) {
+    if (!process.env.ANTHROPIC_API_KEY) {
       res
         .status(503)
-        .json({ error: 'AI Gateway не настроен: добавьте AI_GATEWAY_API_KEY в переменные окружения проекта.' });
+        .json({ error: 'Anthropic API не настроен: добавьте ANTHROPIC_API_KEY в переменные окружения проекта.' });
       return;
     }
 
     const result = await generateObject({
-      model: 'anthropic/claude-sonnet-4-6',
+      model: anthropic('claude-sonnet-4-5-20250929'),
       schema: ExtractedTable,
       system: buildSystemPrompt({ companyName, companyBin }),
       messages: [
