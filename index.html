@@ -702,9 +702,28 @@
     }
     if (!allItems.length) return { headers: [], rows: [] };
 
-    // Detect single-invoice formats (ЭСФ, счёт-фактура, накладная, акт) BEFORE
-    // trying to extract tabular data. These docs aren't a receivables report.
+    // Detect document types whose structure pdf.js cannot parse correctly into a tabular
+    // receivables report. Force these to the AI path (Claude vision/file).
     const fullText = allItems.map(it => it.str).join(' ').toLowerCase();
+
+    // Акт сверки = 2-party reconciliation with mirrored Debit/Credit columns —
+    // pdf.js column binning misreads it as many contractors with doubled amounts.
+    const aktSverkiMarkers = [
+      'акт сверки взаимных расчетов',
+      'акт сверки взаиморасчетов',
+      'акт сверки взаимных расчётов',
+      'задолженность по состоянию на',
+      'по результатам сверки расхождений',
+      'нижеподписавшиеся',
+    ];
+    const aktMatches = aktSverkiMarkers.filter(m => fullText.includes(m));
+    if (aktMatches.length >= 2) {
+      throw new Error(
+        'Это акт сверки взаимных расчётов. Структура с зеркальными колонками Дебет/Кредит ' +
+        'локально читается криво. Отправить на распознавание через Claude Vision?'
+      );
+    }
+
     const invoiceMarkers = [
       'электронный счет-фактура', 'электронный счёт-фактура',
       'счет-фактура', 'счёт-фактура',
